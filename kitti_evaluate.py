@@ -1,87 +1,140 @@
-'''
-Evaluate trained PredNet on KITTI sequences.
-Calculates mean-squared error and plots predictions.
-'''
-
-import os
+#AlbaraaKhayat,2019.In fulfiframesment of MRes.
 import numpy as np
-from six.moves import cPickle
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
+import hickle as hkl
+from skimage import measure as evaluu
+from tqdm import tqdm
 
-from keras import backend as K
-from keras.models import Model, model_from_json
-from keras.layers import Input, Dense, Flatten
+#LOAD
+prediction=hkl.load('X_hat.hkl')
+observation=hkl.load('X_test.hkl')
+prediction=pix2rate(prediction)
+observation=pix2rate(observation)
+#INIT
+frames=9
+sequences=len(prediction)
+#sequences=20
+threshold=0.330588 #0.5mm/h Rain threshold in (normalized)pixel value,13.00365 dBZ,
+width=160
+height=160
+area=width*height
 
-from prednet import PredNet
-from data_utils import SequenceGenerator
-from kitti_settings import *
+xmse=np.zeros((sequences,frames))
+xmae=np.zeros((sequences,frames))
+xssim=np.zeros((sequences,frames))
+xnse=np.zeros((sequences,frames))
+xstd_prediction=np.zeros((sequences,frames))
+xstd_observation=np.zeros((sequences,frames))
+xmse_p=np.zeros((sequences,frames))
+xmae_p=np.zeros((sequences,frames))
+xssim_p=np.zeros((sequences,frames))
+xnse_p=np.zeros((sequences,frames))
+xstd_p=np.zeros((sequences,frames))
+xrmsd=np.zeros((sequences,frames))
+xrmsd_p=np.zeros((sequences,frames))
 
+mse=np.zeros(frames)
+mae=np.zeros(frames)
+ssim=np.zeros(frames)
+nse=np.zeros(frames)
+std_prediction=np.zeros(frames)
+std_observation=np.zeros(frames)
+mse_p=np.zeros(frames)
+mae_p=np.zeros(frames)
+ssim_p=np.zeros(frames)
+nse_p=np.zeros(frames)
+std_p=np.zeros(frames)
+rmsd=np.zeros(frames)
+rmsd_p=np.zeros(frames)
 
-n_plot = 40
-batch_size = 10
-nt = 10
+TP=np.zeros(frames)
+FP=np.zeros(frames)
+TN=np.zeros(frames)
+FN=np.zeros(frames)
+TPm=np.zeros((sequences,frames))
+FPm=np.zeros((sequences,frames))
+TNm=np.zeros((sequences,frames))
+FNm=np.zeros((sequences,frames))
 
-weights_file = os.path.join(WEIGHTS_DIR, 'tensorflow_weights/prednet_kitti_weights.hdf5')
-json_file = os.path.join(WEIGHTS_DIR, 'prednet_kitti_model.json')
-test_file = os.path.join(DATA_DIR, 'X_test.hkl')
-test_sources = os.path.join(DATA_DIR, 'sources_test.hkl')
+#CALC
 
-# Load trained model
-f = open(json_file, 'r')
-json_string = f.read()
+def pix2rate(data)
+    data*=255#offset normalization
+    #data=((data-0.5)/3.6429)-10 #pixel to dBZ
+    data-=0.5
+    data/=3.6429
+    data-=10
+    #data=10**((data-17.6738)/15.6) #dBZ to rainfall (mm/h)
+    data-=17.6738
+    data/=15.6
+    data=10**data
+    return data
+
+for i in tqdm(range(1,10)):
+    for z in range(sequences):
+        xmse[z,i-1]=np.mean((prediction[z,i]-observation[z,i])**2)
+        xmae[z,i-1]=np.mean(np.abs(observation[z,i]-prediction[z,i]))
+        xssim[z,i-1]=evaluu.compare_ssim(observation[z,i],prediction[z,i],win_size=3,multichannel=True)
+        xnse[z,i-1]=1-(np.sum((prediction[z,i]-observation[z,i])**2)/np.sum((observation[z,i]-np.mean(observation[z,i]))**2))
+        xstd_prediction[z,i-1]=np.std(prediction[z,i])
+        xstd_observation[z,i-1]=np.std(observation[z,i])
+        xrmsd[z,i-1]=np.sqrt(np.sum(np.square(prediction[z,i]-observation[z,i]))/area)
+        xmse_p[z,i-1]=np.mean((observation[z,i-1]-observation[z,i])**2)
+        xmae_p[z,i-1]=np.mean(np.abs(observation[z,i]-observation[z,i-1]))
+        xssim_p[z,i-1]=evaluu.compare_ssim(observation[z,i],observation[z,i-1],win_size=3,multichannel=True)
+        xnse_p[z,i-1]=1-(np.sum((observation[z,i-1]-observation[z,i])**2)/np.sum((observation[z,i]-np.mean(observation[z,i]))**2))
+        xstd_p[z,i-1]=np.std(observation[z,i-1])
+        xrmsd_p[z,i-1]=np.sqrt(np.sum(np.square(observation[z,i-1]-observation[z,i]))/area)
+        for x in range(width):
+            for y in range(height):
+                if prediction[z,i,x,y,0] >= threshold and observation[z,i,x,y,0] >= threshold:
+                  TPm[z,i-1]+=1
+                elif prediction[z,i,x,y,0] >= threshold and observation[z,i,x,y,0] < threshold:
+                  FPm[z,i-1]+=1
+                elif prediction[z,i,x,y,0] < threshold and observation[z,i,x,y,0] < threshold:
+                  TNm[z,i-1]+=1
+                elif prediction[z,i,x,y,0] < threshold and observation[z,i,x,y,0] >= threshold:
+                  FNm[z,i-1]+=1
+                else:
+                  print('Error:FP')
+        if (TPm[z,i-1]+FNm[z,i-1]+TNm[z,i-1]+FPm[z,i-1]) != area:
+           print('T-F/P-N inconsistent')
+    TP[i-1]=np.mean(TPm[:,i-1])
+    TN[i-1]=np.mean(TNm[:,i-1])
+    FP[i-1]=np.mean(FPm[:,i-1])
+    FN[i-1]=np.mean(FNm[:,i-1])
+    mse[i-1]=np.mean(xmse[:,i-1])
+    mae[i-1]=np.mean(xmae[:,i-1])
+    ssim[i-1]=np.mean(xssim[:,i-1])
+    nse[i-1]=np.mean(xnse[:,i-1])
+    std_prediction[i-1]=np.mean(xstd_prediction[:,i-1])
+    std_observation[i-1]=np.mean(xstd_observation[:,i-1])
+    mse_p[i-1]=np.mean(xmse_p[:,i-1])
+    mae_p[i-1]=np.mean(xmae_p[:,i-1])
+    ssim_p[i-1]=np.mean(xssim_p[:,i-1])
+    nse_p[i-1]=np.mean(xnse_p[:,i-1])
+    std_p[i-1]=np.mean(xstd_p[:,i-1])
+    rmsd[i-1]=np.mean(xrmsd[:,i-1])
+    rmsd_p[i-1]=np.mean(xrmsd_p[:,i-1])
+    
+#WRITE
+f=open('normalized_clean_scores.txt','w')
+f.write("Model MSE:%s\n" % mse)
+f.write("Model MAE:%s\n" % mae)
+f.write("Model SSIM:%s\n" % ssim)
+f.write("Model NSE:%s\n" % nse)
+f.write("Observation Stddev:%s\n" % std_observation)
+f.write("Model Stddev:%s\n" % std_prediction)
+f.write("Previous Frame Stddev:%s\n" % std_p)
+f.write("Model RMSD:%s\n" % rmsd)
+f.write("Previous Frame MSE:%s\n" % mse_p)
+f.write("Previous Frame MAE:%s\n" % mae_p)
+f.write("Previous Frame SSIM:%s\n" % ssim_p)
+f.write("Previous Frame NSE:%s\n" % nse_p)
+f.write("Previous Frame RMSD:%s\n" % rmsd_p)
 f.close()
-train_model = model_from_json(json_string, custom_objects = {'PredNet': PredNet})
-train_model.load_weights(weights_file)
-
-# Create testing model (to output predictions)
-layer_config = train_model.layers[1].get_config()
-layer_config['output_mode'] = 'prediction'
-data_format = layer_config['data_format'] if 'data_format' in layer_config else layer_config['dim_ordering']
-test_prednet = PredNet(weights=train_model.layers[1].get_weights(), **layer_config)
-input_shape = list(train_model.layers[0].batch_input_shape[1:])
-input_shape[0] = nt
-inputs = Input(shape=tuple(input_shape))
-predictions = test_prednet(inputs)
-test_model = Model(inputs=inputs, outputs=predictions)
-
-test_generator = SequenceGenerator(test_file, test_sources, nt, sequence_start_mode='unique', data_format=data_format)
-X_test = test_generator.create_all()
-X_hat = test_model.predict(X_test, batch_size)
-if data_format == 'channels_first':
-    X_test = np.transpose(X_test, (0, 1, 3, 4, 2))
-    X_hat = np.transpose(X_hat, (0, 1, 3, 4, 2))
-
-# Compare MSE of PredNet predictions vs. using last frame.  Write results to prediction_scores.txt
-mse_model = np.mean( (X_test[:, 1:] - X_hat[:, 1:])**2 )  # look at all timesteps except the first
-mse_prev = np.mean( (X_test[:, :-1] - X_test[:, 1:])**2 )
-if not os.path.exists(RESULTS_SAVE_DIR): os.mkdir(RESULTS_SAVE_DIR)
-f = open(RESULTS_SAVE_DIR + 'prediction_scores.txt', 'w')
-f.write("Model MSE: %f\n" % mse_model)
-f.write("Previous Frame MSE: %f" % mse_prev)
+f=open('normalized_clean_pn.txt','w')
+f.write("Model TP:%s\n" % TP)
+f.write("Model FP:%s\n" % FP)
+f.write("Model TN:%s\n" % TN)
+f.write("Model FN:%s\n" % FN)
 f.close()
-
-# Plot some predictions
-aspect_ratio = float(X_hat.shape[2]) / X_hat.shape[3]
-plt.figure(figsize = (nt, 2*aspect_ratio))
-gs = gridspec.GridSpec(2, nt)
-gs.update(wspace=0., hspace=0.)
-plot_save_dir = os.path.join(RESULTS_SAVE_DIR, 'prediction_plots/')
-if not os.path.exists(plot_save_dir): os.mkdir(plot_save_dir)
-plot_idx = np.random.permutation(X_test.shape[0])[:n_plot]
-for i in plot_idx:
-    for t in range(nt):
-        plt.subplot(gs[t])
-        plt.imshow(X_test[i,t], interpolation='none')
-        plt.tick_params(axis='both', which='both', bottom='off', top='off', left='off', right='off', labelbottom='off', labelleft='off')
-        if t==0: plt.ylabel('Actual', fontsize=10)
-
-        plt.subplot(gs[t + nt])
-        plt.imshow(X_hat[i,t], interpolation='none')
-        plt.tick_params(axis='both', which='both', bottom='off', top='off', left='off', right='off', labelbottom='off', labelleft='off')
-        if t==0: plt.ylabel('Predicted', fontsize=10)
-
-    plt.savefig(plot_save_dir +  'plot_' + str(i) + '.png')
-    plt.clf()
